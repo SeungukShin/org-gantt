@@ -29,7 +29,17 @@
   :type '(repeat integer)
   :group 'org-gantt)
 
-(defcustom org-gantt-weekend-style "{red}"
+(defcustom org-gantt-holiday-list '("2019-08-15" "2019-09-12" "2019-09-13" "2019-10-03" "2019-10-09")
+  "The list of holidays."
+  :type '(repeat string)
+  :group 'org-gantt)
+
+(defcustom org-gantt-holiday-vrule "red!15"
+  "The style for the holiday lines."
+  :type '(string)
+  :group 'org-gantt)
+
+(defcustom org-gantt-weekend-style "{dashed}"
   "The style for the weekend lines."
   :type '(string)
   :group 'org-gantt)
@@ -130,6 +140,28 @@ HEADLINE is a headline from the org-data."
         (dbg-msg "  effort: %d\n" effort-time))
     (dbg-msg "  link: %s\n" linked-to)
     (dbg-msg "  parent: %s\n" parent)))
+
+(defun* org-gantt-mark-holiday (start-date end-date)
+  (setq end-date (time-add end-date (* 24 60 60)))
+  (if (time-less-p end-date start-date)
+      (return-from org-gantt-mark-holiday))
+  (let (body current holiday)
+    (setq current start-date
+          body "")
+    (while (time-less-p current end-date)
+      (if (member (string-to-number (format-time-string "%w" current)) org-gantt-weekend)
+          (setq body (concat body "  \\ganttvrule{}{" (format-time-string "%Y-%m-%d" current) "}\n")))
+      (setq current (time-add current (* 24 60 60))))
+    (setq start-date (time-subtract start-date (* 24 60 60)))
+    (dolist (holiday org-gantt-holiday-list)
+      (setq current (apply 'encode-time (org-parse-time-string holiday)))
+      (if (and (time-less-p start-date current)
+               (time-less-p current end-date))
+          (setq body (concat body "  \\ganttvrule{}{" holiday "}\n"))))
+    (unless (equal body "")
+      (setq body (concat "\n\\begin{scope}[on background layer]\n" body))
+      (setq body (concat body "\\end{scope}")))
+    body))
 
 (defun* org-gantt-headline-output-link (headline)
   "Output gantt links.
@@ -432,8 +464,11 @@ PARAMS determine several options of the gantt chart."
       (setq org-gantt-target-stage org-gantt-target-stage-prepare)
     (setq org-gantt-target-stage org-gantt-target-stage-off))
   (with-current-buffer (current-buffer)
-    (let (parsed-buffer tikz-options start-date-string end-date-string today-value parameters header footer body)
+    (let (parsed-buffer tikz-scale tikz-options
+                        start-date-string end-date-string today-value parameters
+                        header footer body)
       (setq parsed-buffer (org-element-parse-buffer)
+            tikz-scale (plist-get params :tikz-scale)
             tikz-options (plist-get params :tikz-options)
             start-date-string (plist-get params :start-date)
             end-date-string (plist-get params :end-date)
@@ -454,11 +489,25 @@ PARAMS determine several options of the gantt chart."
         (setq body (concat body msg)))
       (dolist (msg (org-element-map parsed-buffer 'headline #'org-gantt-headline-output-link))
         (setq body (concat body msg)))
+      (setq body (concat body (org-gantt-mark-holiday org-gantt-start-date org-gantt-end-date)))
+      ;; tikz options
+      (when (or tikz-scale tikz-options)
+        (setq header (concat header "\\begin{tikzpicture}[")))
+      (when tikz-scale
+        (setq header (concat header "scale=" tikz-scale ", every node/.style={scale=" tikz-scale "}")))
       (when tikz-options
-        (setq header (concat header "\\begin{tikzpicture}[" tikz-options "]\n"))
+        (setq header (concat header ", " tikz-options)))
+      (when (or tikz-scale tikz-options)
+        (setq header (concat header "]\n"))
         (setq footer (concat "\\end{tikzpicture}\n" footer)))
+      ;; gantt chart options
       (setq header (concat header "\\begin{ganttchart}[time slot format=isodate, "))
-      (setq header (concat header (org-gantt-generate-vgrid)))
+      (setq header (concat header "canvas/.append style={fill=none}, "))
+      (setq header (concat header (org-gantt-generate-vgrid) ", "))
+      (setq header (concat header "vrule offset=.5, vrule/.style={draw=" org-gantt-holiday-vrule ", line width=\\ganttvalueof{x unit}"))
+      (if tikz-scale
+        (setq header (concat header "*" tikz-scale)))
+      (setq header (concat header "}"))
       (if (plist-get params :compress)
           (setq header (concat header ", compress calendar")))
       (when today-value
@@ -468,8 +517,10 @@ PARAMS determine several options of the gantt chart."
       (if (plist-get params :parameters)
           (setq header (concat header ", " (plist-get params :parameters))))
       (setq header (concat header "]"))
+      ;; start & end date
       (setq header (concat header (format-time-string "{%Y-%m-%d}" org-gantt-start-date)))
       (setq header (concat header (format-time-string "{%Y-%m-%d}\n" org-gantt-end-date)))
+      ;; gantt title
       (if (plist-get params :compress)
           (setq header (concat header "\\gantttitlecalendar{" org-gantt-compressed-title "}"))
         (setq header (concat header "\\gantttitlecalendar{" org-gantt-title "}")))
@@ -491,7 +542,7 @@ PARAMS determine several options of the gantt chart."
    (list :name "org-gantt"
          :file "gantt.jpg"
          :imagemagick t
-         :tikz-options "scale=5.0, every node/.style={scale=5.0}"
+         :tikz-scale: "3.0"
          :weekend-style "{draw=blue!10, line width=1pt}"
          :workday-style "{draw=blue!5, line width=.75pt}"
          :show-progress 'if-value
