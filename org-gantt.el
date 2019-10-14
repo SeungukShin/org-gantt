@@ -391,7 +391,10 @@ HEADLINE is a headline from the org-data."
   (unless headline
     (return-from org-gantt-headline-prepare))
   (let ((id (org-element-property :ID headline))
+        (hide (org-element-property :HIDE headline))
         (level (org-element-property :level headline)))
+    (if hide
+        (return-from org-gantt-headline-prepare))
     (when (not id)
       (setq org-gantt-id-gen (1+ org-gantt-id-gen))
       (setq id (format "org-gantt-%d" org-gantt-id-gen))

@@ -18,4 +18,4 @@ Currently only following features are supported.
 * `:parameters` parameter
 * `:LINKED-TO:` property always works even if the target has `SCHEDULED` time stamp.
 * `:LINKED-TO:` property can point multiple headlines using separator with white space.
-
+* `:HIDE:` property can hide this headline from gantt chart.
