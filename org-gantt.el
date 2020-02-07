@@ -23,23 +23,13 @@
 (defgroup org-gantt nil "Customization of org-gantt."
   :group 'org)
 
-(defcustom org-gantt-weekend '(0 6)
-  "Weekend and holiday.
-0 is Sunday and 6 is Saturday."
-  :type '(repeat integer)
-  :group 'org-gantt)
-
-(defcustom org-gantt-holiday-list '("2019-08-15" "2019-09-12" "2019-09-13" "2019-10-03" "2019-10-09")
-  "The list of holidays."
-  :type '(repeat string)
-  :group 'org-gantt)
-
-(defcustom org-gantt-holiday-vrule "red!15"
-  "The style for the holiday lines."
+(defcustom org-gantt-weekstart 0
+  "Start of week.
+0 is Sunday and 6 is Saturday"
   :type '(string)
   :group 'org-gantt)
 
-(defcustom org-gantt-weekend-style "{dashed}"
+(defcustom org-gantt-weekstart-style "{black}"
   "The style for the weekend lines."
   :type '(string)
   :group 'org-gantt)
@@ -49,62 +39,102 @@
   :type '(string)
   :group 'org-gantt)
 
+(defcustom org-gantt-weekend '(0 6)
+  "Weekend and holiday.
+0 is Sunday and 6 is Saturday."
+  :type '(repeat integer)
+  :group 'org-gantt)
+
+(defcustom org-gantt-holiday-list '("2020-01-01")
+  "The list of holidays."
+  :type '(repeat string)
+  :group 'org-gantt)
+
+(defcustom org-gantt-holiday-vrule "red!15"
+  "The style for the holiday."
+  :type '(string)
+  :group 'org-gantt)
+
 (defcustom org-gantt-title "year, month=name, day"
   "The style for the title calendar."
   :type '(string)
   :group 'org-gantt)
 
-(defcustom org-gantt-compressed-title "year, month"
+(defcustom org-gantt-comp-title "year, month"
   "The style for the compressed title calendar."
   :type '(string)
   :group 'org-gantt)
 
-;; To filter headlines for id option
-(defconst org-gantt-target-stage-off 0
-  "Target id does not exist in the option.")
-(defconst org-gantt-target-stage-prepare 1
-  "Target id exists in the option but is not yet present.")
-(defconst org-gantt-target-stage-current 2
-  "Target id exists in the option and the current headline is in it.")
-(defconst org-gantt-target-stage-exit 3
-  "Target id exists in the option and the current headline is out of it.")
-(defvar org-gantt-target-stage org-gantt-target-stage-off
-  "Indicator whether current headline is included in target or not.")
-
+;; target information
 (defvar org-gantt-target-id nil
   "Target ID to translate gantt chart.")
 
 (defvar org-gantt-target-level nil
   "Target level to translate gantt chart.")
 
-;; Options for gantt chart
-(defvar org-gantt-start-date-from-option nil)
-(defvar org-gantt-end-date-from-option nil)
-(defvar org-gantt-start-date nil
-  "Start date for gantt chart.")
-(defvar org-gantt-end-date nil
-  "End date for gantt chart.")
+;; scan status
+(defvar org-gantt-scan-status nil
+  "Status of scanning org file.")
+(defconst org-gantt-target-wait 0
+  "Target id is not present yet.")
+(defconst org-gantt-target-on 1
+  "Target id is present and on it now.")
+(defconst org-gantt-target-out 2
+  "Target id is present and out of it now.")
 
-;; Hash table for properties of headlines
-(defconst org-gantt-id-prop :id)
-(defconst org-gantt-level-prop :level)
-(defconst org-gantt-start-from-org-prop :start-from-org
-  "Start time is set from scheduled of org file. t or nil")
-(defconst org-gantt-end-from-org-prop :end-from-org
-  "End time is set from deadline of org file. t or nil")
-(defconst org-gantt-start-time-prop :start-time)
-(defconst org-gantt-end-time-prop :end-time)
-(defconst org-gantt-effort-time-prop :effort-time)
-(defconst org-gantt-linked-to-prop :linked-to)
-(defconst org-gantt-parent-prop :parent)
-(defconst org-gantt-has-child-prop :has-child)
-(defconst org-gantt-milestone-prop :milestone)
+;; index of auto id generation
+(defvar org-gantt-index-id 0
+  "Index of id for headline without id")
 
+;; update reason
+(defconst org-gantt-update-none 0
+  "Update time of parent only")
+(defconst org-gantt-update-from 1
+  "Update time of parent and from")
+(defconst org-gantt-update-to 2
+  "Update time of parent and to")
+(defconst org-gantt-update-both 3
+  "Update time of parent, from and to")
+
+;; key: id
+;; value: id: id
+;;        level: level of headline
+;;        raw: string for headline
+;;        start: start date
+;;        start-fix: start date from org file in bool
+;;        end: end date
+;;        end-fix: end date from org file in bool
+;;        effort: effort in day
+;;        tags: milestone state in bool
+;;        parent: parent id
+;;        children: children ides in list
+;;        to: linked to ides in list
+;;        from: linked from ides in list
 (defvar org-gantt-hash-table nil
   "Hash table for properties of headlines")
 
-;; Index of id generator
-(defvar org-gantt-id-index 0)
+(defvar org-gantt-root nil
+  "Root ides in list.")
+
+;; start and end date for gantt table
+(defvar org-gantt-start nil
+  "Start date form hash table")
+(defvar org-gantt-end nil
+  "End date from hash table")
+
+;; information for propagation to update time
+(defvar org-gantt-update nil
+  "Update state of one scan")
+(defvar org-gantt-count 0
+  "Update loop count")
+(defconst org-gantt-timeout 1000
+  "Maximum loop count to update time")
+
+;; type of finding working day
+(defconst org-gantt-advance 1
+  "Find a working day before start time")
+(defconst org-gantt-postpone 2
+  "Find a working day after start time")
 
 
 (defun dbg-msg (format-string &rest args)
@@ -112,431 +142,544 @@
   ;(apply #'message format-string args)
   (insert (apply #'format format-string args)))
 
-(defun* org-gantt-headline-debug-output (headline)
-  "Print headline information.
-HEADLINE is a headline from the org-data."
-  (unless org-gantt-hash-table
-    (return-from org-gantt-headline-debug-output))
-  (unless headline
-    (return-from org-gantt-headline-debug-output))
-  (let (id prop start-time end-time effort-time linked-to parent)
-    (setq id (org-element-property :ID headline))
-    (setq prop (gethash id org-gantt-hash-table))
-    (unless prop
-      (return-from org-gantt-headline-debug-output))
-    (dbg-msg "%s %s %s\n" id
-             (plist-get prop org-gantt-level-prop)
-             (org-element-property :raw-value headline))
-    (setq start-time (plist-get prop org-gantt-start-time-prop)
-          end-time (plist-get prop org-gantt-end-time-prop)
-          effort-time (plist-get prop org-gantt-effort-time-prop)
-          linked-to (plist-get prop org-gantt-linked-to-prop)
-          parent (plist-get prop org-gantt-parent-prop))
-    (if start-time
-        (dbg-msg "  start: %s\n" (format-time-string "%Y-%m-%d" start-time)))
-    (if end-time
-        (dbg-msg "  end: %s\n" (format-time-string "%Y-%m-%d" end-time)))
-    (if effort-time
-        (dbg-msg "  effort: %d\n" effort-time))
-    (dbg-msg "  link: %s\n" linked-to)
-    (dbg-msg "  parent: %s\n" parent)))
+(defun org-gantt-dump (id)
+  (let (prop level raw start start-fix end end-fix effort tags parent children to from)
+    (setq prop (gethash id org-gantt-hash-table)
+          level (plist-get prop :level)
+          raw (plist-get prop :raw)
+          start (plist-get prop :start)
+          start-fix (plist-get prop :start-fix)
+          end (plist-get prop :end)
+          end-fix (plist-get prop :end-fix)
+          effort (plist-get prop :effort)
+          tags (plist-get prop :tags)
+          parent (plist-get prop :parent)
+          children (plist-get prop :children)
+          to (plist-get prop :to)
+          from (plist-get prop :from))
+    (dbg-msg "%20s (%20s:%d %15s %10s(%3s)~%10s(%3s) %3s)\n" raw id level tags
+             (org-gantt-time-to-string start) start-fix
+             (org-gantt-time-to-string end) end-fix effort)
+    (dbg-msg "  parent: %s\n" parent)
+    (dbg-msg "  children: %s\n" children)
+    (dbg-msg "  to: %s\n" to)
+    (dbg-msg "  from: %s\n" from)))
 
-(defun* org-gantt-mark-holiday (start-date end-date)
-  (setq end-date (time-add end-date (* 24 60 60)))
-  (if (time-less-p end-date start-date)
-      (return-from org-gantt-mark-holiday))
-  (let (body current holiday)
-    (setq current start-date
-          body "")
-    (while (time-less-p current end-date)
+(defun org-gantt-plist-to-alist (plist)
+  "Transform property list PLIST into an association list."
+  (cl-loop for p on plist by #'cddr
+           collect (cons (car p) (cadr p))))
+
+(defun* org-gantt-timestamp-to-time (timestamp)
+  "Change org timestamp to time value
+TIMESTAMP is org timestamp"
+  (unless timestamp
+    (return-from org-gantt-timestamp-to-time))
+  (let ((raw (org-element-property :raw-value timestamp)))
+    (apply 'encode-time (org-parse-time-string raw))))
+
+(defun* org-gantt-time-to-string (time)
+  "Change time value to string
+TIME is time value"
+  (unless time
+    (return-from org-gantt-time-to-string))
+  (format-time-string "%Y-%m-%d" time))
+
+(defun* org-gantt-duration-to-day (duration)
+  "Change duration string to integer in day
+DURATION is a string which represents duration"
+  (unless duration
+    (return-from org-gantt-duration-to-day))
+  (truncate (/ (org-duration-string-to-minutes duration) 60 24)))
+
+(defun time-equal-p (t1 t2)
+  (if (or (not t1)
+          (not t2))
+      nil
+    (equal t1 t2)))
+
+(defun org-gantt-insert-holiday (start end)
+  "Insert holiday to gantt table
+START is start date for gantt table
+END is end date for gantt table"
+  (let (msg current holiday)
+    (setq current start
+          msg "")
+    ;; insert weekend
+    (setq end (time-add end (* 24 60 60)))
+    (while (time-less-p current end)
       (if (member (string-to-number (format-time-string "%w" current)) org-gantt-weekend)
-          (setq body (concat body "  \\ganttvrule{}{" (format-time-string "%Y-%m-%d" current) "}\n")))
+          (setq msg (concat msg "  \\ganttvrule{}{" (org-gantt-time-to-string current) "}\n")))
       (setq current (time-add current (* 24 60 60))))
-    (setq start-date (time-subtract start-date (* 24 60 60)))
+    ;; insert holiday
+    (setq start (time-subtract start (* 24 60 60)))
     (dolist (holiday org-gantt-holiday-list)
       (setq current (apply 'encode-time (org-parse-time-string holiday)))
-      (if (and (time-less-p start-date current)
-               (time-less-p current end-date))
-          (setq body (concat body "  \\ganttvrule{}{" holiday "}\n"))))
-    (unless (equal body "")
-      (setq body (concat "\n\\begin{scope}[on background layer]\n" body))
-      (setq body (concat body "\\end{scope}")))
-    body))
+      (if (and (time-less-p start current)
+               (time-less-p current end))
+          (setq msg (concat msg "  \\ganttvrule{}{" holiday "}\n"))))
+    ;; insert header and footer
+    (unless (equal msg "")
+      (setq msg (concat "\\begin{scope}[on background layer]\n" msg)
+            msg (concat msg "\\end{scope}\n")))
+    msg))
 
-(defun* org-gantt-headline-output-link (headline)
-  "Output gantt links.
-HEADLINE is a headline from the org-data."
-  (unless org-gantt-hash-table
-    (return-from org-gantt-headline-output-link))
-  (unless headline
-    (return-from org-gantt-headline-output-link))
-  (let (id prop start-time end-time linked-to msg)
-    (setq id (org-element-property :ID headline))
-    (setq prop (gethash id org-gantt-hash-table))
-    (unless prop
-      (return-from org-gantt-headline-output-link))
-    (setq start-time (plist-get prop org-gantt-start-time-prop)
-          end-time (plist-get prop org-gantt-end-time-prop))
-    (when (or (time-less-p end-time org-gantt-start-date)
-              (time-less-p org-gantt-end-date start-time))
-      (return-from org-gantt-headline-output-link))
-    (setq linked-to (plist-get prop org-gantt-linked-to-prop))
-    (when linked-to
-      (dolist (link linked-to)
-        (setq prop (gethash link org-gantt-hash-table))
-        (when prop
-          (setq start-time (plist-get prop org-gantt-start-time-prop)
-                end-time (plist-get prop org-gantt-end-time-prop))
-          (when (and (time-less-p start-time org-gantt-end-date)
-                     (time-less-p org-gantt-start-date end-time))
-            (setq msg (concat msg "\n\\ganttlink{" id "}{" link "}")))))
-      (unless msg
-        (return-from org-gantt-headline-output-link))
-      msg)))
+(defun org-gantt-insert-link (id)
+  "Insert gantt link for id to gantt table
+ID is an id to insert gantt link"
+  (let (prop level raw start start-fix end end-fix effort tags parent children to from i msg)
+    (setq prop (gethash id org-gantt-hash-table)
+          level (plist-get prop :level)
+          raw (plist-get prop :raw)
+          start (plist-get prop :start)
+          start-fix (plist-get prop :start-fix)
+          end (plist-get prop :end)
+          end-fix (plist-get prop :end-fix)
+          effort (plist-get prop :effort)
+          tags (plist-get prop :tags)
+          parent (plist-get prop :parent)
+          children (plist-get prop :children)
+          to (plist-get prop :to)
+          from (plist-get prop :from)
+          msg "")
+    (dolist (i to)
+      (setq msg (concat msg "\\ganttlink{" id "}{" i "}\n")))
+    msg))
 
-(defun* org-gantt-headline-output-bar (headline)
-  "Output gantt bars.
-HEADLINE is a headline from the org-data."
-  (unless org-gantt-hash-table
-    (return-from org-gantt-headline-output-bar))
-  (unless headline
-    (return-from org-gantt-headline-output-bar))
-  (let (id prop level start-time end-time tags msg)
-    (setq id (org-element-property :ID headline))
-    (setq prop (gethash id org-gantt-hash-table))
-    (unless prop
-      (return-from org-gantt-headline-output-bar))
-    (setq level (plist-get prop org-gantt-level-prop)
-          start-time (plist-get prop org-gantt-start-time-prop)
-          end-time (plist-get prop org-gantt-end-time-prop)
-          tags (org-element-property :tags headline))
-    (when (or (time-less-p end-time org-gantt-start-date)
-              (time-less-p org-gantt-end-date start-time))
-      (return-from org-gantt-headline-output-bar))
-    (setq msg (concat msg "\\\\\n"))
+(defun org-gantt-insert-bar (id)
+  "Inert gantt bar for id to gantt table
+ID is an id to insert gantt bar"
+  (let (prop level raw start start-fix end end-fix effort tags parent children to from msg)
+    (setq prop (gethash id org-gantt-hash-table)
+          level (plist-get prop :level)
+          raw (plist-get prop :raw)
+          start (plist-get prop :start)
+          start-fix (plist-get prop :start-fix)
+          end (plist-get prop :end)
+          end-fix (plist-get prop :end-fix)
+          effort (plist-get prop :effort)
+          tags (plist-get prop :tags)
+          parent (plist-get prop :parent)
+          children (plist-get prop :children)
+          to (plist-get prop :to)
+          from (plist-get prop :from)
+          msg "")
     (setq msg (concat msg (make-string (* 2 (- level 1)) ? )))
-    (cond ((plist-get prop org-gantt-has-child-prop)
+    (cond (children
            (setq msg (concat msg "\\ganttgroup")))
           ((and tags (member "milestone" tags))
            (setq msg (concat msg "\\ganttmilestone")))
           (t
            (setq msg (concat msg "\\ganttbar"))))
-    (setq msg (concat msg "[name=" id "]"))
-    (setq msg (concat msg "{" (org-element-property :raw-value headline) "}"))
-    (if (time-less-p start-time org-gantt-start-date)
-        (setq start-time org-gantt-start-date))
-    (setq msg (concat msg (format-time-string "{%Y-%m-%d}" start-time)))
-    (if (time-less-p org-gantt-end-date end-time)
-        (setq end-time org-gantt-end-date))
-    (setq msg (concat msg (format-time-string "{%Y-%m-%d}" end-time)))
+    (setq msg (concat msg "[name=" id "]"
+                      "{" raw "}"
+                      "{" (org-gantt-time-to-string start) "}"
+                      "{" (org-gantt-time-to-string end) "}"))
+    (if (and tags (member "milestone" tags))
+        (setq msg (concat msg "\n"))
+      (setq msg (concat msg "\\\\\n")))
     msg))
 
-(defconst org-gantt-update-caller-headline 0)
-(defconst org-gantt-update-caller-child 1)
-(defconst org-gantt-update-caller-linked-from 2)
-(defun* org-gantt-update-entry (id start-time end-time from)
-  "Update start and end time with effort, parent, and linked-to.
-ID is an identifier of the target to update time.
-START-TIME is an start time for the target.
-END-TIME is an end time for the target.
-FROM is caller where 0 is headline, 1 is child, and 2 is linked-from."
-  (unless id
-    (return-from org-gantt-update-entry))
-  (unless org-gantt-hash-table
-    (return-from org-gantt-update-entry))
-  (let (prop start-from-org end-from-org current-start-time current-end-time effort-time parent linked-to)
-    (setq prop (gethash id org-gantt-hash-table))
-    (unless prop
-      (return-from org-gantt-update-entry))
-    (setq start-from-org (plist-get prop org-gantt-start-from-org-prop)
-          end-from-org (plist-get prop org-gantt-end-from-org-prop)
-          current-start-time (plist-get prop org-gantt-start-time-prop)
-          current-end-time (plist-get prop org-gantt-end-time-prop)
-          effort-time (plist-get prop org-gantt-effort-time-prop)
-          parent (plist-get prop org-gantt-parent-prop)
-          linked-to (plist-get prop org-gantt-linked-to-prop))
-    (if (= from org-gantt-update-caller-child)
-        (plist-put prop org-gantt-has-child-prop "t"))
-    (when (and start-time
-               (not start-from-org)
-               (or (not current-start-time)
-                   (time-less-p start-time current-start-time)))
-      (setq current-start-time start-time)
-      (plist-put prop org-gantt-start-time-prop start-time))
-    (when (and end-time
-               (not end-from-org)
-               (or (not current-end-time)
-                   (time-less-p current-end-time end-time)))
-      (setq current-end-time end-time)
-      (plist-put prop org-gantt-end-time-prop end-time))
-    ;; calculate start time or end time from effort time
-    (when (and effort-time current-start-time (not current-end-time))
-      (setq current-end-time (time-add current-start-time (* (- effort-time 24) 60 60)))
-      (plist-put prop org-gantt-end-time-prop current-end-time))
-    (when (and effort-time (not current-start-time) current-end-time)
-      (setq current-start-time (time-subtract current-end-time (* (- effort-time 24) 60 60)))
-      (plist-put prop org-gantt-start-time-prop current-start-time))
-    ;; avoid weekend
-    (when current-start-time
-      (while (member (string-to-number (format-time-string "%w" current-start-time)) org-gantt-weekend)
-        (setq current-start-time (time-add current-start-time (* 24 60 60))))
-      (plist-put prop org-gantt-start-time-prop current-start-time))
-    (when current-end-time
-      (while (member (string-to-number (format-time-string "%w" current-end-time)) org-gantt-weekend)
-        (setq current-end-time (time-subtract current-end-time (* 24 60 60))))
-      (plist-put prop org-gantt-end-time-prop current-end-time))
-    ;; fix wrong schedule and deadline
-    (if (time-less-p current-end-time current-start-time)
-        (cond ((and start-from-org (not end-from-org))
-               (setq current-end-time current-start-time)
-               (plist-put prop org-gantt-end-time-prop current-end-time))
-              ((not start-from-org)
-               (setq current-start-time current-end-time)
-               (plist-put prop org-gantt-start-time-prop current-start-time))))
-    ;; update org-gantt-start-date and org-gantt-end-date to display gantt chart
-    (if (and (not org-gantt-start-date-from-option)
-             (or (not org-gantt-start-date)
-                 (time-less-p current-start-time org-gantt-start-date)))
-        (setq org-gantt-start-date current-start-time))
-    (if (and (not org-gantt-end-date-from-option)
-             (or (not org-gantt-end-date)
-                 (time-less-p org-gantt-end-date current-end-time)))
-        (setq org-gantt-end-date current-end-time))
-    ;; propagate start time and end time to parent and linked-to
-    (when parent
-      (org-gantt-update-entry parent current-start-time current-end-time org-gantt-update-caller-child))
-    (dolist (link linked-to)
-      (org-gantt-update-entry link (time-add current-end-time (* 24 60 60)) nil org-gantt-update-caller-linked-from))))
-
-(defun* org-gantt-headline-process (headline)
-  "Update a hash entry with related entries.
-HEADLINE is a headline from the org-data."
-  (unless org-gantt-hash-table
-    (return-from org-gantt-headline-process))
-  (unless headline
-    (return-from org-gantt-headline-process))
-  (let (id prop start-time end-time)
-    (setq id (org-element-property :ID headline))
-    (setq prop (gethash id org-gantt-hash-table))
-    (unless prop
-      (return-from org-gantt-headline-process))
-    (setq start-time (plist-get prop org-gantt-start-time-prop)
-          end-time (plist-get prop org-gantt-end-time-prop))
-    (org-gantt-update-entry id start-time end-time org-gantt-update-caller-headline)))
-
-(defun* org-gantt-get-timestamp (type headline)
-  "Get scheduled or deadline time.
-TYPE is :scheduled or :deadline.
-HEADLINE is a headline from the org-data."
-  (unless type
-    (return-from org-gantt-get-timestamp))
-  (unless headline
-    (return-from org-gantt-get-timestamp))
-  (let (timestamp timestamp-string)
-    (setq timestamp (org-element-property type headline))
-    (unless timestamp
-      (return-from org-gantt-get-timestamp))
-    (setq timestamp-string (org-element-property :raw-value timestamp))
-    (apply 'encode-time (org-parse-time-string timestamp-string))))
-
-(defun* org-gantt-get-duration (headline)
-  "Get effort duration in hour.
-HEADLINE is a headline from the org-data"
-  (unless headline
-    (return-from org-gantt-get-duration))
-  (let ((effort-time (org-element-property :EFFORT headline)))
-    (unless effort-time
-      (return-from org-gantt-get-duration))
-    (/ (org-duration-string-to-minutes effort-time) 60)))
-
-(defun* org-gantt-headline-set-hash (id level headline)
-  "Initialize a hash entry with information of a headline.
-ID is an identifier of the headline.
-LEVEL is a level of the headline.
-HEADLINE is a headline from the org-data."
-  (unless org-gantt-hash-table
-    (return-from org-gantt-headline-set-hash))
-  (unless headline
-    (return-from org-gantt-headline-set-hash))
-  (let (prop start-time end-time effort-time parent linked-to)
-    (setq prop `(,org-gantt-id-prop ,id))
-    (plist-put prop org-gantt-level-prop level)
-    ;; start, end and effort time
-    (setq start-time (org-gantt-get-timestamp :scheduled headline)
-          end-time (org-gantt-get-timestamp :deadline headline)
-          effort-time (org-gantt-get-duration headline))
-    (if start-time
-        (plist-put prop org-gantt-start-from-org-prop "t"))
-    (if end-time
-        (plist-put prop org-gantt-end-from-org-prop "t"))
-    (if (and start-time effort-time)
-        (plist-put prop org-gantt-end-from-org-prop "t"))
-    (if (and end-time effort-time)
-        (plist-put prop org-gantt-start-from-org-prop "t"))
-    (plist-put prop org-gantt-start-time-prop start-time)
-    (plist-put prop org-gantt-end-time-prop end-time)
-    (plist-put prop org-gantt-effort-time-prop effort-time)
-    ;; parent
-    (setq parent (org-element-property :parent headline))
-    (plist-put prop org-gantt-parent-prop (org-element-property :ID parent))
-    ;; linked-to
-    (setq linked-to (org-element-property :LINKED-TO headline))
-    (if linked-to
-        (plist-put prop org-gantt-linked-to-prop (split-string linked-to)))
-    (puthash id prop org-gantt-hash-table)))
-
-(defun* org-gantt-headline-prepare (headline)
-  "Filter out a headline which is not included in target.
-HEADLINE is a headline from the org-data."
-  (unless headline
-    (return-from org-gantt-headline-prepare))
-  (let ((id (org-element-property :ID headline))
-        (hide (org-element-property :HIDE headline))
-        (level (org-element-property :level headline)))
-    (if hide
-        (return-from org-gantt-headline-prepare))
-    (when (not id)
-      (setq org-gantt-id-gen (1+ org-gantt-id-gen))
-      (setq id (format "org-gantt-%d" org-gantt-id-gen))
-      (org-element-put-property headline :ID id))
-    (cond ((eq org-gantt-target-stage org-gantt-target-stage-off)
-           (org-gantt-headline-set-hash id level headline))
-          ((eq org-gantt-target-stage org-gantt-target-stage-prepare)
-           (when (string= org-gantt-target-id id)
-             (setq org-gantt-target-level level
-                   org-gantt-target-stage org-gantt-target-stage-current)
-             (org-gantt-headline-set-hash id level headline)))
-          ((eq org-gantt-target-stage org-gantt-target-stage-current)
-           (if (>= org-gantt-target-level level)
-               (setq org-gantt-target-stage org-gantt-target-stage-exit)
-             (org-gantt-headline-set-hash id level headline)))
-          ((eq org-gantt-target-stage org-gantt-target-stage-exit)))))
-
-(defun org-gantt-generate-vgrid ()
-  "Generate virtual grid setting based on weekday and weekend"
-  (let (day-of-week day-of-week-list num count vgrid current-type-of-day type-of-day)
-    (setq day-of-week (string-to-number (format-time-string "%w" org-gantt-start-date)))
-    (setq day-of-week-list (number-sequence day-of-week 6))
-    (if (< (length day-of-week-list) 8)
-        (setq day-of-week-list (append  day-of-week-list (number-sequence 0 day-of-week))))
-    (setq num 0
-          count 0
-          vgrid "vgrid={"
-          type-of-day 3)				; unknown value
-    (while (< num 7)
-      (if (or
-           (member (nth num day-of-week-list) org-gantt-weekend)
-           (member (nth (1+ num) day-of-week-list) org-gantt-weekend))
-          (setq current-type-of-day 0)			; weekend
-        (setq current-type-of-day 1))			; weekday
-      (if (or (= type-of-day 3)
-              (= current-type-of-day type-of-day))
-          (setq type-of-day current-type-of-day
-                count (1+ count))
-        (if (= type-of-day 0)
-            (setq vgrid (concat vgrid (format "*%d%s," count org-gantt-weekend-style)))
-          (setq vgrid (concat vgrid (format "*%d%s," count org-gantt-weekday-style))))
-        (setq type-of-day current-type-of-day
-              count 1))
-      (if (= num 6)
-          (if (= type-of-day 0)
-              (setq vgrid (concat vgrid (format "*%d%s," count org-gantt-weekend-style)))
-            (setq vgrid (concat vgrid (format "*%d%s," count org-gantt-weekday-style)))))
-      (setq num (1+ num)))
-    (setq vgrid (substring vgrid 0 -1))		; remove the last \n
+(defun org-gantt-vgrid (start)
+  "Set style of vgrid
+START is start date for gantt chart"
+  (let ((start-day (string-to-number (format-time-string "%w" start)))
+        (before 0)
+        (after 0)
+        (vgrid "vgrid={"))
+    (setq before (- org-gantt-weekstart start-day))
+    (if (<= before 0)
+        (setq before (+ before 6)))
+    (setq after (- 6 before))
+    (if (/= before 0)
+        (setq vgrid (concat vgrid (format "*%d%s," before org-gantt-weekday-style))))
+    (setq vgrid (concat vgrid (format "*1%s," org-gantt-weekstart-style)))
+    (if (/= after 0)
+        (setq vgrid (concat vgrid (format "*%d%s," after org-gantt-weekday-style))))
+    (setq vgrid (substring vgrid 0 -1))		; remove the last ,
     (setq vgrid (concat vgrid "}"))
     vgrid))
 
-(defun org-gantt-plist-to-alist (plist)
-  "Transform property list PLIST into an association list."
-  (cl-loop for p on plist by #'cddr
-	   collect (cons (car p) (cadr p))))
+(defun org-gantt-find-start-end (id)
+  "Update start and end time for gantt table.
+ID is an id to check start and end time for gantt table"
+  (let (prop start end)
+    (setq prop (gethash id org-gantt-hash-table)
+          start (plist-get prop :start)
+          end (plist-get prop :end))
+    (if (or (not org-gantt-start)
+            (time-less-p start org-gantt-start))
+        (setq org-gantt-start start))
+    (if (or (not org-gantt-end)
+            (time-less-p org-gantt-end end))
+        (setq org-gantt-end end))))
+
+(defun org-gantt-find-workingday (time type)
+  "Find working day from time based on type
+TIME is start time to find working day
+TYPE is type to find working day, org-gantt-postpone or org-gantt-advance"
+  (while (and time
+              (or (member (string-to-number (format-time-string "%w" time)) org-gantt-weekend)
+                  (member (org-gantt-time-to-string time) org-gantt-holiday-list)))
+    (if (= type org-gantt-postpone)
+        (setq time (time-add time (* 24 60 60)))
+      (setq time (time-subtract time (* 24 60 60)))))
+  time)
+
+(defun org-gantt-find-min-max (nlist)
+  "Find minimum and maximum start and end time for the list.
+NLIST is a list of ides to find minimum and maximum"
+  (let (prop start start-min start-max
+             end end-min end-max i)
+    (setq start-min nil
+          start-max nil
+          end-min nil
+          end-max nil)
+    (dolist (i nlist)
+      (setq prop (gethash i org-gantt-hash-table)
+            start (plist-get prop :start)
+            end (plist-get prop :end))
+      (when start
+        (if (or (not start-min)
+                (time-less-p start start-min))
+            (setq start-min start))
+        (if (or (not start-max)
+                (time-less-p start-max start))
+            (setq start-max start)))
+      (when end
+        (if (or (not end-min)
+                (time-less-p end end-min))
+            (setq end-min end))
+        (if (or (not end-max)
+                (time-less-p end-max end))
+            (setq end-max end))))
+    (list start-min start-max end-min end-max)))
+
+(defun *org-gantt-update-time (id &rest nlist)
+  "Update start and end time for id.
+ID is an id to update start and end time
+NLIST is a list for additional arguments
+NLIST-CALLER is an id which calls this function
+NLIST-UPDATE is the why this function is called"
+  (let (prop start start-fix end end-fix effort parent children to from
+             start-min start-max end-min end-max rlist change
+             caller update i test-id)
+    (setq prop (gethash id org-gantt-hash-table)
+          start (plist-get prop :start)
+          start-fix (plist-get prop :start-fix)
+          end (plist-get prop :end)
+          end-fix (plist-get prop :end-fix)
+          effort (plist-get prop :effort)
+          parent (plist-get prop :parent)
+          children (plist-get prop :children)
+          to (plist-get prop :to)
+          from (plist-get prop :from)
+          change nil
+          caller (nth 0 nlist)
+          update (nth 1 nlist))
+    ;; If this is milestone, do not update schedule.
+    (if (and tags (member "milestone" tags))
+        (return-from org-gantt-update-time))
+    ;; If this is parent, ignore its schedule and set schedule including all children's schedule.
+    (when children
+      (setq rlist (org-gantt-find-min-max children)
+            start-min (nth 0 rlist)
+            start-max (nth 1 rlist)
+            end-min (nth 2 rlist)
+            end-max (nth 3 rlist))
+      (when (and start-min
+                 (or (not start)
+                     (not (time-equal-p start-min start))))
+        (setq start start-min
+              change t))
+      (when (and end-max
+                 (or (not end)
+                     (not (time-equal-p end end-max))))
+        (setq end end-max
+              change t)))
+    ;; If this is child, calculate start and end date.
+    (unless children
+      ;; own
+      (when (and start-fix (not end-fix) effort)
+        (setq end (time-add start (* effort 24 60 60))
+              end-fix t
+              change t))
+      (when (and end-fix (not start-fix) effort)
+        (setq start (time-subtract end (* effort 24 60 60))
+              start-fix t
+              change t))
+      ;; from
+      (setq rlist (org-gantt-find-min-max from)
+            start-min (nth 0 rlist)
+            start-max (nth 1 rlist)
+            end-min (nth 2 rlist)
+            end-max (nth 3 rlist))
+      (when end-max
+        (setq end-max (time-add end-max (* 24 60 60)))
+        (when (or (not start)
+                  (and (time-less-p start end-max)
+                       (not start-fix)))
+          (setq start (org-gantt-find-workingday end-max org-gantt-postpone))
+          (if (and effort (not end-fix))
+              (setq end (org-gantt-find-workingday (time-add start (* effort 24 60 60))
+                                                   org-gantt-postpone)))
+          (setq change t)))
+      ;; to
+      (setq rlist (org-gantt-find-min-max to)
+            start-min (nth 0 rlist)
+            start-max (nth 1 rlist)
+            end-min (nth 2 rlist)
+            end-max (nth 3 rlist))
+      (when start-min
+        (setq start-min (time-subtract start-min (* 24 60 60)))
+        (when (or (not end)
+                  (and (time-less-p start-min end)
+                       (not end-fix)))
+          (setq end (org-gantt-find-workingday start-min org-gantt-advance))
+          (if (and effort (not start-fix))
+              (setq start (org-gantt-find-workingday (time-subtract end (* effort 24 60 60))
+                                                     org-gantt-advance)))
+          (setq change t)))
+      )
+    (when change
+      (setq org-gantt-update t)
+      (plist-put prop :start start)
+      (plist-put prop :end end)
+      (plist-put prop :start-fix start-fix)
+      (plist-put prop :end-fix end-fix)
+      (puthash id prop org-gantt-hash-table))
+    ))
+
+(defun org-gantt-update-from (id)
+  "Update from entry for id.
+ID is an id to update from entry"
+  (let (prop to)
+    (setq prop (gethash id org-gantt-hash-table)
+          to (plist-get prop :to))
+    (let (prop i from)
+      (dolist (i to)
+        (setq prop (gethash i org-gantt-hash-table)
+              from (plist-get prop :from)
+              from (append from (list id)))
+        (plist-put prop :from from)
+        (puthash i prop org-gantt-hash-table)))))
+
+(defun org-gantt-map-hash (nlist func)
+  "Map func to hash table from nlist to children.
+NLIST is a start list for the hash table
+FUNC is a function to call"
+  (let (id prop children ret)
+    (setq ret nil)
+    (dolist (id nlist)
+      (setq prop (gethash id org-gantt-hash-table)
+            children (plist-get prop :children))
+      (setq ret (append ret (list (funcall func id))))
+      (if children
+          (setq ret (append ret (org-gantt-map-hash children func)))))
+    ret))
+
+(defun* org-gantt-init-hash (headline)
+  "Initialize hash table from headline. Fill only id, level, headline, child.
+HEADLINE is a headline from the org file"
+  (unless headline
+    (return-from org-gantt-init-hash))
+  (let ((id (org-element-property :ID headline))
+        (level (org-element-property :level headline))
+        (hide (org-element-property :HIDE headline)))
+    ;; If hide property is set, skip the headline.
+    (if hide
+        (return-from org-gantt-init-hash))
+    ;; If we are already out of target, skip the headline.
+    (if (= org-gantt-scan-status org-gantt-target-out)
+        (return-from org-gantt-init-hash))
+    ;; If we are waiting for target, check id.
+    ;; If id is matched, we are on the target.
+    (when (and (= org-gantt-scan-status org-gantt-target-wait)
+               (string= id org-gantt-target-id))
+      (setq org-gantt-scan-status org-gantt-target-on
+            org-gantt-target-level level))
+    ;; If we are not on the target, skip the headline.
+    (if (/= org-gantt-scan-status org-gantt-target-on)
+        (return-from org-gantt-init-hash))
+    ;; We are always on the target here.
+    ;; If target exists and current level is smaller than target's one,
+    ;; we are out of target.
+    (when (and org-gantt-target-id
+               (not (string= org-gantt-target-id id))
+               (>= org-gantt-target-level level))
+      (setq org-gantt-scan-status org-gantt-target-out)
+      (return-from org-gantt-init-hash))
+    ;; The headline should be added to the hash table here.
+    ;; Generate id if id property is missing.
+    (when (not id)
+      (setq org-gantt-index-id (1+ org-gantt-index-id)
+            id (format "org-gantt-%d" org-gantt-index-id))
+      (org-element-put-property headline :ID id))
+    ;; Add id to org-gantt-root, if the headline is root.
+    (if (or (= level org-gantt-target-level)
+            (= level 1))
+        (setq org-gantt-root (append org-gantt-root (list id))))
+    ;; Add the headline to the hash table.
+    (let ((prop `(,:id, id))
+          (raw (org-element-property :raw-value headline))
+          (start (org-gantt-timestamp-to-time (org-element-property :scheduled headline)))
+          (end (org-gantt-timestamp-to-time (org-element-property :deadline headline)))
+          (effort (org-gantt-duration-to-day (org-element-property :EFFORT headline)))
+          (tags (org-element-property :tags headline))
+          (parent (org-element-property :ID (org-element-property :parent headline)))
+          (to (org-element-property :LINKED-TO headline)))
+      (plist-put prop :level level)
+      (plist-put prop :raw raw)
+      (if (not start)
+          (plist-put prop :start-fix nil)
+        (plist-put prop :start start)
+        (plist-put prop :start-fix t))
+      (if (not end)
+          (plist-put prop :end-fix nil)
+        (plist-put prop :end end)
+        (plist-put prop :end-fix t))
+      (when effort
+        (plist-put prop :effort effort))
+      (when tags
+        (plist-put prop :tags tags))
+      (when parent
+        (plist-put prop :parent parent)
+        ;; Parent should be push to the hash table already.
+        ;; Update parent's children
+        (let (prop children)
+          (setq prop (gethash parent org-gantt-hash-table)
+                children (plist-get prop :children)
+                children (append children (list id)))
+          (plist-put prop :children children)
+          (puthash parent prop org-gantt-hash-table)))
+      (when to
+        ;; We cannot sure linked-to is already in the hash table or not
+        ;; Update later
+        (plist-put prop :to (split-string to)))
+      (puthash id prop org-gantt-hash-table))))
 
 (defun org-dblock-write:org-gantt-chart (params)
-  "Update gantt chard code.
+  "Update gantt chart code.
 PARAMS determine several options of the gantt chart."
-  (setq org-gantt-hash-table (make-hash-table :test 'equal))
-  (setq org-gantt-id-gen 0)
-  (setq org-gantt-target-id (plist-get params :id))
-  (setq org-gantt-target-level nil)
-  (setq org-gantt-start-date-from-option nil
-        org-gantt-end-date-from-option nil
-        org-gantt-start-date nil
-        org-gantt-end-date nil)
-  (if org-gantt-target-id
-      (setq org-gantt-target-stage org-gantt-target-stage-prepare)
-    (setq org-gantt-target-stage org-gantt-target-stage-off))
   (with-current-buffer (current-buffer)
-    (let (parsed-buffer tikz-scale tikz-options
-                        start-date-string end-date-string today-value parameters
-                        header footer body)
-      (setq parsed-buffer (org-element-parse-buffer)
-            tikz-scale (plist-get params :tikz-scale)
-            tikz-options (plist-get params :tikz-options)
-            start-date-string (plist-get params :start-date)
-            end-date-string (plist-get params :end-date)
-            today-value (plist-get params :today)
-            parameters (plist-get params :parameters)
-            header ""
-            footer ""
-            body "")
-      (when start-date-string
-        (setq org-gantt-start-date-from-option "t")
-        (setq org-gantt-start-date (apply 'encode-time (org-parse-time-string start-date-string))))
-      (when end-date-string
-        (setq org-gantt-end-date-from-option "t")
-        (setq org-gantt-end-date (apply 'encode-time (org-parse-time-string end-date-string))))
-      (org-element-map parsed-buffer 'headline #'org-gantt-headline-prepare)
-      (org-element-map parsed-buffer 'headline #'org-gantt-headline-process)
-      (dolist (msg (org-element-map parsed-buffer 'headline #'org-gantt-headline-output-bar))
-        (setq body (concat body msg)))
-      (dolist (msg (org-element-map parsed-buffer 'headline #'org-gantt-headline-output-link))
-        (setq body (concat body msg)))
-      (setq body (concat body (org-gantt-mark-holiday org-gantt-start-date org-gantt-end-date)))
-      ;; tikz options
+    (setq org-gantt-hash-table (make-hash-table :test 'equal)
+          org-gantt-target-id (plist-get params :id)
+          org-gantt-target-level 0
+          org-gantt-index-id 0
+          org-gantt-root nil
+          org-gantt-start nil
+          org-gantt-end nil)
+    (if org-gantt-target-id
+        (setq org-gantt-scan-status org-gantt-target-wait)
+      (setq org-gantt-scan-status org-gantt-target-on))
+    (let ((org-buffer (org-element-parse-buffer))
+          (today (plist-get params :today))
+          (start-date (plist-get params :start-date))
+          (end-date (plist-get params :end-date))
+          (tikz-scale (plist-get params :tikz-scale))
+          (tikz-options (plist-get params :tikz-options))
+          (compress (plist-get params :compress))
+          (parameters (plist-get params :parameters))
+          (file (plist-get params :file))
+          (parsed-buffer nil)
+          (header "")
+          (body "")
+          (footer "")
+          (msg ""))
+      ;; parse options
+      (if today
+          (if (string= today "t")
+              (setq today (current-time))
+            (setq today (apply 'encode-time (org-parse-time-string today)))))
+      (if start-date
+          (setq start-date (apply 'encode-time (org-parse-time-string start-date))))
+      (if end-date
+          (seq end-date (apply 'encode-time (org-parse-time-string end-date))))
+      ;; parse the org file
+      (org-element-map org-buffer 'headline #'org-gantt-init-hash)
+      (org-gantt-map-hash org-gantt-root #'org-gantt-update-from)
+      (setq org-gantt-update t
+            org-gantt-count org-gantt-timeout)
+      (while (and org-gantt-update
+                  (/= org-gantt-count 0))
+        (setq org-gantt-update nil
+              org-gantt-count (1- org-gantt-count))
+        (org-gantt-map-hash org-gantt-root #'org-gantt-update-time))
+      (if (= org-gantt-count 0)
+          (dbg-msg "\ntimeout\n"))
+      (org-gantt-map-hash org-gantt-root #'org-gantt-find-start-end)
+      (if (not start-date)
+          (setq start-date org-gantt-start)
+        (setq org-gantt-start start-date))
+      (if (not end-date)
+          (setq end-date org-gantt-end)
+        (setq org-gantt-end end-date))
+      ;; set header and footer - tikzpicture
       (when (or tikz-scale tikz-options)
-        (setq header (concat header "\\begin{tikzpicture}[")))
-      (when tikz-scale
-        (setq header (concat header "scale=" tikz-scale ", every node/.style={scale=" tikz-scale "}")))
-      (when tikz-options
-        (setq header (concat header ", " tikz-options)))
-      (when (or tikz-scale tikz-options)
+        (setq header (concat header "\\begin{tikzpicture}["))
+        (if tikz-scale
+            (setq header (concat header "scale=" tikz-scale
+                                 ", every node/.style={scale=" tikz-scale "}")))
+        (if tikz-options
+            (setq header (concat header ", " tikz-options)))
         (setq header (concat header "]\n"))
-        (setq footer (concat "\\end{tikzpicture}\n" footer)))
-      ;; gantt chart options
-      (setq header (concat header "\\begin{ganttchart}[time slot format=isodate, "))
-      (setq header (concat header "canvas/.append style={fill=none}, "))
-      (setq header (concat header (org-gantt-generate-vgrid) ", "))
-      (setq header (concat header "vrule offset=.5, vrule/.style={draw=" org-gantt-holiday-vrule ", line width=\\ganttvalueof{x unit}"))
+        (setq footer (concat "\n\\end{tikzpicture}" footer)))
+      ;; set header and footer - ganttchart
+      (setq header (concat header "\\begin{ganttchart}[inline"
+                           ", time slot format=isodate"
+                           ", canvas/.append style={fill=none}"
+                           ", " (org-gantt-vgrid org-gantt-start)
+                           ", vrule offset=.5"
+                           ", vrule/.style={draw=" org-gantt-holiday-vrule
+                           ", line width=\\ganttvalueof{x unit}"))
       (if tikz-scale
-        (setq header (concat header "*" tikz-scale)))
+          (setq header (concat header "*" tikz-scale)))
       (setq header (concat header "}"))
-      (if (plist-get params :compress)
+      (if compress
           (setq header (concat header ", compress calendar")))
-      (when today-value
-        (if (equal t today-value)
-            (setq today-value (format-time-string "%Y-%m-%d" (current-time))))
-        (setq header (concat header ", today=" today-value)))
-      (if (plist-get params :parameters)
-          (setq header (concat header ", " (plist-get params :parameters))))
+      (if today
+          (setq header (concat header ", today=" (org-gantt-time-to-string today))))
+      (if parameters
+          (setq header (concat header ", " parameters)))
       (setq header (concat header "]"))
-      ;; start & end date
-      (setq header (concat header (format-time-string "{%Y-%m-%d}" org-gantt-start-date)))
-      (setq header (concat header (format-time-string "{%Y-%m-%d}\n" org-gantt-end-date)))
-      ;; gantt title
-      (if (plist-get params :compress)
-          (setq header (concat header "\\gantttitlecalendar{" org-gantt-compressed-title "}"))
-        (setq header (concat header "\\gantttitlecalendar{" org-gantt-title "}")))
-      (setq footer (concat (concat "\\end{ganttchart}\n" footer)))
-      (setq footer (substring footer 0 -1))		; remove the last \n
-      (setq body (concat header body "\n" footer))
-      (if (plist-get params :file)
+      (setq header (concat header "{" (org-gantt-time-to-string org-gantt-start) "}"
+                           "{" (org-gantt-time-to-string org-gantt-end) "}\n"))
+      (setq footer (concat "\\end{ganttchart}" footer))
+      ;; set header and footer - gantttitle
+      (if compress
+          (setq header (concat header "\\gantttitlecalendar{" org-gantt-comp-title "}\\\\\n"))
+        (setq header (concat header "\\gantttitlecalendar{" org-gantt-title "}\\\\\n")))
+      ;; set body - bar
+      (dolist (msg (org-gantt-map-hash org-gantt-root #'org-gantt-insert-bar))
+        (setq body (concat body msg)))
+      (setq body (substring body 0 -3))		; remove the last \\\\\n
+      (setq body (concat body "\n"))
+      ;; set body - link
+      (dolist (msg (org-gantt-map-hash org-gantt-root #'org-gantt-insert-link))
+        (setq body (concat body msg)))
+      ;; set body - holiday
+      (setq body (concat body (org-gantt-insert-holiday org-gantt-start org-gantt-end)))
+
+;      (dbg-msg "\norg-gantt-dump %s-%s\n" (org-gantt-time-to-string org-gantt-start)
+;               (org-gantt-time-to-string org-gantt-end))
+;      (org-gantt-map-hash org-gantt-root #'org-gantt-dump)
+
+      ;; insert gantt chart
+      (setq body (concat header body footer))
+      (if file
           (progn
-            (org-babel-execute:latex body
-                                     (org-babel-merge-params (org-gantt-plist-to-alist (append params (list :fit t :headers "\\usepackage{pgfgantt}\n")))))
-            (insert (org-babel-result-to-file (plist-get params :file)))
+            (org-babel-execute:latex
+             body (org-babel-merge-params
+                   (org-gantt-plist-to-alist
+                    (append params
+                            (list :fit t :headers "\\usepackage{kotex}\n\\usepackage{pgfgantt}\n")))))
+            (insert (org-babel-result-to-file file))
             (org-redisplay-inline-images))
-        (insert body)))))
+        (insert body))
+      ) ;let
+    ) ;with-current-buffer
+  )
+
 
 (defun org-insert-dblock:org-gantt-chart ()
   "Insert org-gantt dynamic block."
@@ -563,3 +706,11 @@ PARAMS determine several options of the gantt chart."
 (provide 'org-gantt)
 
 ;;; org-gantt.el ends here
+
+(require 'ert)
+
+(ert-deftest org-gantt-tc-duration-to-day ()
+  (let ((s "2w")
+        (d nil))
+    (setq d (org-gantt-duration-to-day s))
+    (should (equal d 14))))
