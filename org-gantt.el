@@ -269,20 +269,28 @@ ID is an id to insert gantt bar"
           to (plist-get prop :to)
           from (plist-get prop :from)
           msg "")
-    (setq msg (concat msg (make-string (* 2 (- level 1)) ? )))
-    (cond (children
-           (setq msg (concat msg "\\ganttgroup")))
-          ((and tags (member "milestone" tags))
-           (setq msg (concat msg "\\ganttmilestone")))
-          (t
-           (setq msg (concat msg "\\ganttbar"))))
-    (setq msg (concat msg "[name=" id "]"
-                      "{" raw "}"
-                      "{" (org-gantt-time-to-string start) "}"
-                      "{" (org-gantt-time-to-string end) "}"))
-    (if (and tags (member "milestone" tags))
-        (setq msg (concat msg "\n"))
-      (setq msg (concat msg "\\\\\n")))
+    (when (or (and (time-less-p org-gantt-start start)
+                   (time-less-p start org-gantt-end))
+              (and (time-less-p org-gantt-start end)
+                   (time-less-p end org-gantt-end)))
+      (if (time-less-p start org-gantt-start)
+          (setq start org-gantt-start))
+      (if (time-less-p org-gantt-end end)
+          (setq end org-gantt-end))
+      (setq msg (concat msg (make-string (* 2 (- level 1)) ? )))
+      (cond (children
+             (setq msg (concat msg "\\ganttgroup")))
+            ((and tags (member "milestone" tags))
+             (setq msg (concat msg "\\ganttmilestone")))
+            (t
+             (setq msg (concat msg "\\ganttbar"))))
+      (setq msg (concat msg "[name=" id "]"
+                        "{" raw "}"
+                        "{" (org-gantt-time-to-string start) "}"
+                        "{" (org-gantt-time-to-string end) "}"))
+      (if (and tags (member "milestone" tags))
+          (setq msg (concat msg "\n"))
+        (setq msg (concat msg "\\\\\n"))))
     msg))
 
 (defun org-gantt-vgrid (start compress)
@@ -602,7 +610,7 @@ PARAMS determine several options of the gantt chart."
       (if start-date
           (setq start-date (apply 'encode-time (org-parse-time-string start-date))))
       (if end-date
-          (seq end-date (apply 'encode-time (org-parse-time-string end-date))))
+          (setq end-date (apply 'encode-time (org-parse-time-string end-date))))
       ;; parse the org file
       (org-element-map org-buffer 'headline #'org-gantt-init-hash)
       (org-gantt-map-hash org-gantt-root #'org-gantt-update-from)
@@ -616,6 +624,8 @@ PARAMS determine several options of the gantt chart."
       (if (= org-gantt-count 0)
           (dbg-msg "\ntimeout\n"))
       (org-gantt-map-hash org-gantt-root #'org-gantt-find-start-end)
+      (setq org-gantt-start (time-subtract org-gantt-start (* 24 60 60))
+            org-gantt-end (time-add org-gantt-end (* 24 60 60)))
       (if (not start-date)
           (setq start-date org-gantt-start)
         (setq org-gantt-start start-date))
