@@ -39,6 +39,11 @@
   :type '(string)
   :group 'org-gantt)
 
+(defcustom org-gantt-comp-weekday-style "{draw=none}"
+  "The style for the weekday lines for the compressed calendar."
+  :type '(string)
+  :group 'org-gantt)
+
 (defcustom org-gantt-weekend '(0 6)
   "Weekend and holiday.
 0 is Sunday and 6 is Saturday."
@@ -280,22 +285,26 @@ ID is an id to insert gantt bar"
       (setq msg (concat msg "\\\\\n")))
     msg))
 
-(defun org-gantt-vgrid (start)
+(defun org-gantt-vgrid (start compress)
   "Set style of vgrid
 START is start date for gantt chart"
   (let ((start-day (string-to-number (format-time-string "%w" start)))
+        (weekday-style nil)
         (before 0)
         (after 0)
         (vgrid "vgrid={"))
+    (if compress
+        (setq weekday-style org-gantt-comp-weekday-style)
+      (setq weekday-style org-gantt-weekday-style))
     (setq before (- org-gantt-weekstart start-day))
     (if (<= before 0)
         (setq before (+ before 6)))
     (setq after (- 6 before))
     (if (/= before 0)
-        (setq vgrid (concat vgrid (format "*%d%s," before org-gantt-weekday-style))))
+        (setq vgrid (concat vgrid (format "*%d%s," before weekday-style))))
     (setq vgrid (concat vgrid (format "*1%s," org-gantt-weekstart-style)))
     (if (/= after 0)
-        (setq vgrid (concat vgrid (format "*%d%s," after org-gantt-weekday-style))))
+        (setq vgrid (concat vgrid (format "*%d%s," after weekday-style))))
     (setq vgrid (substring vgrid 0 -1))		; remove the last ,
     (setq vgrid (concat vgrid "}"))
     vgrid))
@@ -628,7 +637,7 @@ PARAMS determine several options of the gantt chart."
       (setq header (concat header "\\begin{ganttchart}[inline"
                            ", time slot format=isodate"
                            ", canvas/.append style={fill=none}"
-                           ", " (org-gantt-vgrid org-gantt-start)
+                           ", " (org-gantt-vgrid org-gantt-start compress)
                            ", vrule offset=.5"
                            ", vrule/.style={draw=" org-gantt-holiday-vrule
                            ", line width=\\ganttvalueof{x unit}"))
