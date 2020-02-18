@@ -364,13 +364,13 @@ NLIST is a list of ides to find minimum and maximum"
             (setq end-max end))))
     (list start-min start-max end-min end-max)))
 
-(defun *org-gantt-update-time (id &rest nlist)
+(defun org-gantt-update-time (id &rest nlist)
   "Update start and end time for id.
 ID is an id to update start and end time
 NLIST is a list for additional arguments
 NLIST-CALLER is an id which calls this function
 NLIST-UPDATE is the why this function is called"
-  (let (prop start start-fix end end-fix effort parent children to from
+  (let (prop start start-fix end end-fix effort tags parent children to from
              start-min start-max end-min end-max rlist change
              caller update i test-id)
     (setq prop (gethash id org-gantt-hash-table)
@@ -379,6 +379,7 @@ NLIST-UPDATE is the why this function is called"
           end (plist-get prop :end)
           end-fix (plist-get prop :end-fix)
           effort (plist-get prop :effort)
+          tags (plist-get prop :tags)
           parent (plist-get prop :parent)
           children (plist-get prop :children)
           to (plist-get prop :to)
@@ -387,77 +388,75 @@ NLIST-UPDATE is the why this function is called"
           caller (nth 0 nlist)
           update (nth 1 nlist))
     ;; If this is milestone, do not update schedule.
-    (if (and tags (member "milestone" tags))
-        (return-from org-gantt-update-time))
-    ;; If this is parent, ignore its schedule and set schedule including all children's schedule.
-    (when children
-      (setq rlist (org-gantt-find-min-max children)
-            start-min (nth 0 rlist)
-            start-max (nth 1 rlist)
-            end-min (nth 2 rlist)
-            end-max (nth 3 rlist))
-      (when (and start-min
-                 (or (not start)
-                     (not (time-equal-p start-min start))))
-        (setq start start-min
-              change t))
-      (when (and end-max
-                 (or (not end)
-                     (not (time-equal-p end end-max))))
-        (setq end end-max
-              change t)))
-    ;; If this is child, calculate start and end date.
-    (unless children
-      ;; own
-      (when (and start-fix (not end-fix) effort)
-        (setq end (time-add start (* effort 24 60 60))
-              end-fix t
-              change t))
-      (when (and end-fix (not start-fix) effort)
-        (setq start (time-subtract end (* effort 24 60 60))
-              start-fix t
-              change t))
-      ;; from
-      (setq rlist (org-gantt-find-min-max from)
-            start-min (nth 0 rlist)
-            start-max (nth 1 rlist)
-            end-min (nth 2 rlist)
-            end-max (nth 3 rlist))
-      (when end-max
-        (setq end-max (time-add end-max (* 24 60 60)))
-        (when (or (not start)
-                  (and (time-less-p start end-max)
-                       (not start-fix)))
-          (setq start (org-gantt-find-workingday end-max org-gantt-postpone))
-          (if (and effort (not end-fix))
-              (setq end (org-gantt-find-workingday (time-add start (* effort 24 60 60))
-                                                   org-gantt-postpone)))
-          (setq change t)))
-      ;; to
-      (setq rlist (org-gantt-find-min-max to)
-            start-min (nth 0 rlist)
-            start-max (nth 1 rlist)
-            end-min (nth 2 rlist)
-            end-max (nth 3 rlist))
-      (when start-min
-        (setq start-min (time-subtract start-min (* 24 60 60)))
-        (when (or (not end)
-                  (and (time-less-p start-min end)
-                       (not end-fix)))
-          (setq end (org-gantt-find-workingday start-min org-gantt-advance))
-          (if (and effort (not start-fix))
-              (setq start (org-gantt-find-workingday (time-subtract end (* effort 24 60 60))
-                                                     org-gantt-advance)))
-          (setq change t)))
-      )
-    (when change
-      (setq org-gantt-update t)
-      (plist-put prop :start start)
-      (plist-put prop :end end)
-      (plist-put prop :start-fix start-fix)
-      (plist-put prop :end-fix end-fix)
-      (puthash id prop org-gantt-hash-table))
-    ))
+    (unless (and tags (member "milestone" tags))
+      ;; If this is parent, ignore its schedule and set schedule including all children's schedule.
+      (when children
+        (setq rlist (org-gantt-find-min-max children)
+              start-min (nth 0 rlist)
+              start-max (nth 1 rlist)
+              end-min (nth 2 rlist)
+              end-max (nth 3 rlist))
+        (when (and start-min
+                   (or (not start)
+                       (not (time-equal-p start-min start))))
+          (setq start start-min
+                change t))
+        (when (and end-max
+                   (or (not end)
+                       (not (time-equal-p end end-max))))
+          (setq end end-max
+                change t)))
+      ;; If this is child, calculate start and end date.
+      (unless children
+        ;; own
+        (when (and start-fix (not end-fix) effort)
+          (setq end (time-add start (* effort 24 60 60))
+                end-fix t
+                change t))
+        (when (and end-fix (not start-fix) effort)
+          (setq start (time-subtract end (* effort 24 60 60))
+                start-fix t
+                change t))
+        ;; from
+        (setq rlist (org-gantt-find-min-max from)
+              start-min (nth 0 rlist)
+              start-max (nth 1 rlist)
+              end-min (nth 2 rlist)
+              end-max (nth 3 rlist))
+        (when end-max
+          (setq end-max (time-add end-max (* 24 60 60)))
+          (when (or (not start)
+                    (and (time-less-p start end-max)
+                         (not start-fix)))
+            (setq start (org-gantt-find-workingday end-max org-gantt-postpone))
+            (if (and effort (not end-fix))
+                (setq end (org-gantt-find-workingday (time-add start (* effort 24 60 60))
+                                                     org-gantt-postpone)))
+            (setq change t)))
+        ;; to
+        (setq rlist (org-gantt-find-min-max to)
+              start-min (nth 0 rlist)
+              start-max (nth 1 rlist)
+              end-min (nth 2 rlist)
+              end-max (nth 3 rlist))
+        (when start-min
+          (setq start-min (time-subtract start-min (* 24 60 60)))
+          (when (or (not end)
+                    (and (time-less-p start-min end)
+                         (not end-fix)))
+            (setq end (org-gantt-find-workingday start-min org-gantt-advance))
+            (if (and effort (not start-fix))
+                (setq start (org-gantt-find-workingday (time-subtract end (* effort 24 60 60))
+                                                       org-gantt-advance)))
+            (setq change t)))
+        )
+      (when change
+        (setq org-gantt-update t)
+        (plist-put prop :start start)
+        (plist-put prop :end end)
+        (plist-put prop :start-fix start-fix)
+        (plist-put prop :end-fix end-fix)
+        (puthash id prop org-gantt-hash-table)))))
 
 (defun org-gantt-update-from (id)
   "Update from entry for id.
